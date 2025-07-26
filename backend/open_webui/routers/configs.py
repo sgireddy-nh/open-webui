@@ -13,6 +13,8 @@ from open_webui.utils.tools import get_tool_server_data, get_tool_servers_data
 router = APIRouter()
 
 
+from open_webui.config import OAUTH_PROVIDERS
+
 ############################
 # ImportConfig
 ############################
@@ -36,6 +38,27 @@ async def import_config(form_data: ImportConfigForm, user=Depends(get_admin_user
 @router.get("/export", response_model=dict)
 async def export_config(user=Depends(get_admin_user)):
     return get_config()
+
+############################
+# OAuth Providers Info
+############################
+
+class OAuthProviderInfo(BaseModel):
+    name: str
+    redirect_uri: str
+    picture_url: Optional[str] = None
+
+@router.get("/oauth_providers", response_model=dict)
+async def get_oauth_providers():
+    # Expose only safe info for frontend
+    providers = {}
+    for name, data in OAUTH_PROVIDERS.items():
+        providers[name] = {
+            "redirect_uri": data.get("redirect_uri"),
+            "picture_url": data.get("picture_url"),
+        }
+    return {"oauth_providers": providers}
+
 
 
 ############################
