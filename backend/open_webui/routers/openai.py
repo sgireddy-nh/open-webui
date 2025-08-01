@@ -41,6 +41,8 @@ from open_webui.utils.payload import (
 from open_webui.utils.misc import (
     convert_logit_bias_input_to_json,
 )
+from open_webui.routers import retrieval
+
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
@@ -784,27 +786,44 @@ async def generate_chat_completion(
             "role": user.role,
         }
 
-    # --- OpenHands PATCH: File handling for chat completions ---
+    # --- OpenHands PATCH: RAG file chunk retrieval for chat completions ---
     files_field = form_data.get("files")
     if files_field:
         from open_webui.models.files import Files
-        file_contents = []
-        for file_id in files_field:
-            file_obj = Files.get_file_by_id(file_id)
-            if file_obj and hasattr(file_obj, "data") and file_obj.data:
-                # Try to get text content from file data
-                content = file_obj.data.get("content") if isinstance(file_obj.data, dict) else None
-                if content:
-                    file_contents.append(f"File: {file_obj.filename}\n{content}")
+        rag_chunks = []
+        user_query = None
+        # Find the latest user message as the query
+        if "messages" in payload and isinstance(payload["messages"], list):
+            for msg in reversed(payload["messages"]):
+                if msg.get("role") == "user" and msg.get("content"):
+                    user_query = msg["content"]
+                    break
+        if user_query:
+            for file_id in files_field:
+                file_obj = Files.get_file_by_id(file_id)
+                if file_obj and hasattr(file_obj, "meta") and file_obj.meta:
+                    collection_name = file_obj.meta.get("collection_name") or f"file-{file_id}"
+                    try:
+                        # Query the vector DB for relevant chunks
+                        result = retrieval.query_doc(
+                            collection_name=collection_name,
+                            query_embedding=request.app.state.EMBEDDING_FUNCTION(
+                                user_query, prefix="query:", user=user
+                            ),
+                            k=request.app.state.config.TOP_K if hasattr(request.app.state.config, "TOP_K") else 4,
+                            user=user,
+                        )
+                        for chunk in result.get("documents", []):
+                            if chunk:
+                                rag_chunks.append(f"File: {file_obj.filename}\n{chunk}")
+                    except Exception as e:
+                        rag_chunks.append(f"File: {file_obj.filename}\n[Error retrieving chunks: {e}]")
                 else:
-                    file_contents.append(f"File: {file_obj.filename}\n[No content found]")
-            else:
-                file_contents.append(f"File ID {file_id} not found or inaccessible.")
-        # Inject file summaries into the system prompt or as a user message
-        if file_contents:
-            # Try to inject as a user message before the last message
+                    rag_chunks.append(f"File ID {file_id} not found or inaccessible.")
+        # Inject RAG chunks into the system prompt or as a user message
+        if rag_chunks:
             if "messages" in payload and isinstance(payload["messages"], list):
-                payload["messages"].insert(-1, {"role": "user", "content": "\n\n".join(file_contents)})
+                payload["messages"].insert(-1, {"role": "user", "content": "\n\n".join(rag_chunks)})
     # --- END PATCH ---
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
