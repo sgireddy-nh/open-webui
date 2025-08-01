@@ -784,6 +784,29 @@ async def generate_chat_completion(
             "role": user.role,
         }
 
+    # --- OpenHands PATCH: File handling for chat completions ---
+    files_field = form_data.get("files")
+    if files_field:
+        from open_webui.models.files import Files
+        file_contents = []
+        for file_id in files_field:
+            file_obj = Files.get_file_by_id(file_id)
+            if file_obj and hasattr(file_obj, "data") and file_obj.data:
+                # Try to get text content from file data
+                content = file_obj.data.get("content") if isinstance(file_obj.data, dict) else None
+                if content:
+                    file_contents.append(f"File: {file_obj.filename}\n{content}")
+                else:
+                    file_contents.append(f"File: {file_obj.filename}\n[No content found]")
+            else:
+                file_contents.append(f"File ID {file_id} not found or inaccessible.")
+        # Inject file summaries into the system prompt or as a user message
+        if file_contents:
+            # Try to inject as a user message before the last message
+            if "messages" in payload and isinstance(payload["messages"], list):
+                payload["messages"].insert(-1, {"role": "user", "content": "\n\n".join(file_contents)})
+    # --- END PATCH ---
+
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
     key = request.app.state.config.OPENAI_API_KEYS[idx]
 
