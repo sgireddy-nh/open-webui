@@ -53,7 +53,17 @@ async def fetch_ollama_models(request: Request, user: UserModel = None):
 
 async def fetch_openai_models(request: Request, user: UserModel = None):
     openai_response = await openai.get_all_models(request, user=user)
-    return openai_response["data"]
+    models = openai_response["data"]
+    # Inject file_upload capability for OpenAI/Azure models
+    for model in models:
+        if "info" not in model:
+            model["info"] = {}
+        if "meta" not in model["info"]:
+            model["info"]["meta"] = {}
+        if "capabilities" not in model["info"]["meta"]:
+            model["info"]["meta"]["capabilities"] = {}
+        model["info"]["meta"]["capabilities"]["file_upload"] = True
+    return models
 
 
 async def get_all_base_models(request: Request, user: UserModel = None):
