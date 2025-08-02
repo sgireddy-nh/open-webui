@@ -806,6 +806,39 @@ async def generate_chat_completion(
             if "messages" in payload and isinstance(payload["messages"], list):
                 payload["messages"].insert(-1, {"role": "user", "content": "\n\n".join(file_contents)})
     # --- END PATCH ---
+    # --- RAG PATCH: Inject relevant file chunks from vector DB (pgvector) ---
+    if files_field:
+        try:
+            from open_webui.routers.retrieval import query_doc_handler, QueryDocForm
+            from open_webui.models.files import Files
+            relevant_chunks = []
+            user_question = None
+            if "messages" in payload and isinstance(payload["messages"], list):
+                # Find the last user message (the current question)
+                for msg in reversed(payload["messages"]):
+                    if msg.get("role") == "user":
+                        user_question = msg.get("content")
+                        break
+            if user_question:
+                for file_id in files_field:
+                    file_obj = Files.get_file_by_id(file_id)
+                    if file_obj:
+                        collection_name = f"file-{file_obj.id}"
+                        form = QueryDocForm(collection_name=collection_name, query=user_question, k=4)
+                        # Call the handler directly (sync)
+                        result = query_doc_handler(request, form, user)
+                        # result is a dict with 'results' key
+                        if result and hasattr(result, "get") and result.get("results"):
+                            for chunk in result["results"]:
+                                chunk_text = chunk.get("text") or chunk.get("content")
+                                if chunk_text:
+                                    relevant_chunks.append(f"File: {file_obj.filename}\n{chunk_text}")
+            if relevant_chunks:
+                payload["messages"].insert(-1, {"role": "user", "content": "\n\n".join(relevant_chunks)})
+        except Exception as e:
+            log.warning(f"RAG patch failed: {e}")
+    # --- END RAG PATCH ---
+
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
     key = request.app.state.config.OPENAI_API_KEYS[idx]
